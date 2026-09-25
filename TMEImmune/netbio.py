@@ -1,5 +1,6 @@
 import numpy as np 
 import pandas as pd
+import hashlib
 import warnings
 from collections import defaultdict
 import scipy.stats as stat
@@ -17,10 +18,85 @@ warnings.filterwarnings(action='ignore', category=DeprecationWarning)
 warnings.filterwarnings(action='ignore', category=FutureWarning)
 
 
+_TRAIN_CACHE = {}
+
+
+def clear_netbio_cache():
+	"""Empty the cached NetBio training results (pathway selection + fitted model)."""
+	_TRAIN_CACHE.clear()
+
+
+def _fingerprint(*parts):
+	h = hashlib.blake2b(digest_size=16)
+	for part in parts:
+		h.update(repr(part).encode())
+	return h.hexdigest()
+
+
+def _select_proximal_pathways(target, train_genes, reactome, nGene, qval):
+	"""Biomarker-proximal Reactome pathways: pathways enriched (hypergeometric) for the top network
+	propagated biomarker genes of the treatment target."""
+	bdf = data_processing.load_data('nb_biomarker/%s.txt' % target).dropna(subset=['gene_id'])
+	train_gene_set = set(train_genes)
+	b_genes = []
+	for gene in bdf.sort_values(by=['propagate_score'], ascending=False)['gene_id'].tolist():
+		if gene in train_gene_set and gene not in b_genes:
+			b_genes.append(gene)
+			if len(b_genes) >= nGene:
+				break
+	b_gene_set = set(b_genes)
+
+	M, N = len(train_genes), len(b_gene_set)
+	pws = list(reactome.keys())
+	n_arr, k_arr = np.empty(len(pws)), np.empty(len(pws))
+	for i, pw in enumerate(pws):
+		pw_genes = set(reactome[pw]) & train_gene_set
+		n_arr[i] = len(pw_genes)
+		k_arr[i] = len(pw_genes & b_gene_set)
+	pvalues = stat.hypergeom.sf(k_arr - 1, M, n_arr, N)          # vectorized over pathways
+	_, qvalues, _, _ = multipletests(pvalues)
+	tmp = pd.DataFrame({'pw': pws, 'p': pvalues, 'q': qvalues}).sort_values(by=['q'])
+	return tmp.loc[tmp['q'] <= qval, 'pw'].tolist()
+
+
+def _train_netbio(target, train_edf, train_epdf, train_responses, train_geneid, reactome,
+				  nGene, qval, penalty, n_jobs = None):
+	"""Select the proximal pathways and fit the NetBio logistic model. Cached: the training data are fixed
+	(Gide by default), so repeated scoring of cohorts with the same gene/pathway coverage refits nothing."""
+	train_genes = train_edf[train_geneid].tolist()
+	key = _fingerprint(target, nGene, qval, penalty, sorted(train_genes),
+					   sorted(train_epdf['pathway'].tolist()), np.asarray(train_responses).tolist())
+	if key in _TRAIN_CACHE:
+		return _TRAIN_CACHE[key]
+
+	proximal_pathways = _select_proximal_pathways(target, train_genes, reactome, nGene, qval)
+	if len(proximal_pathways) == 0:
+		raise ValueError(
+			f"NetBio: no pathway is significantly proximal to the {target} biomarkers among the "
+			f"{len(train_genes)} genes shared by the training data and this cohort, so there is nothing "
+			f"to train on. This happens when the input covers only part of the transcriptome (a targeted "
+			f"panel): NetBio needs transcriptome-wide expression. Check the input with "
+			f"data_processing.assess_gene_coverage.")
+	X_train = train_epdf.loc[train_epdf['pathway'].isin(proximal_pathways), :].T.values[1:]
+
+	param_grid = {'penalty': ['l2'], 'max_iter': [1000], 'solver': ['lbfgs'],
+				  'C': np.arange(0.1, 1, 0.1), 'class_weight': ['balanced']}
+	if penalty == 'none':
+		param_grid = {'penalty': [None], 'max_iter': [1000], 'class_weight': ['balanced']}
+	cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+	gcv = GridSearchCV(LogisticRegression(), param_grid=param_grid, cv=cv, scoring='roc_auc',
+					   n_jobs=n_jobs).fit(X_train, train_responses)
+
+	out = (gcv.best_estimator_, proximal_pathways)
+	_TRAIN_CACHE[key] = out
+	return out
+
+
+
 def get_netbio(test_gene, test_clin, test_clinid, test_ssgsea = None, 
 			   cohort_targets = {'PD1':['Gide']}, train_gene = None, 
 			   train_geneid = "gene_id", train_clin = None, train_clinid = None, train_ssgsea = None, 
-			   nGene = 200, qval = 0.01, penalty = "l2"):
+			   nGene = 200, qval = 0.01, penalty = "l2", n_jobs = None):
 
 	""" 
 	train NetBio model and get NetBio score
@@ -58,59 +134,20 @@ def get_netbio(test_gene, test_clin, test_clinid, test_ssgsea = None,
 
 
 	### data cleanup: expression standardization
-	train_edf = nbu.expression_StandardScaler(train_edf)
+	# only the pathway tables are standardized: the gene-level matrices are used for their gene names
+	# (common genes, biomarker overlap), never for their values
 	train_epdf = nbu.expression_StandardScaler(train_epdf)
-	test_edf = nbu.expression_StandardScaler(test_edf)
 	test_epdf = nbu.expression_StandardScaler(test_epdf)
 
-	biomarker_dir = 'nb_biomarker'
-	bdf = data_processing.load_data('%s/%s.txt'%(biomarker_dir, target))
-	bdf = bdf.dropna(subset=['gene_id'])
-	b_genes = []
-	for idx, gene in enumerate(bdf.sort_values(by=['propagate_score'], ascending=False)['gene_id'].tolist()):
-		if gene in train_edf[train_geneid].tolist():
-			if not gene in b_genes:
-				b_genes.append(gene)
-			if len(set(b_genes)) >= nGene:
-				break
+	model, proximal_pathways = _train_netbio(target, train_edf, train_epdf, train_responses, train_geneid,
+											 reactome, nGene, qval, penalty, n_jobs)
 
-	tmp_hypergeom = defaultdict(list)
-	pvalues, qvalues = [], []
-	for pw in list(reactome.keys()):
-		pw_genes = list(set(reactome[pw]) & set(train_edf[train_geneid].tolist()))
-		M = len(train_edf[train_geneid].tolist())
-		n = len(pw_genes)
-		N = len(set(b_genes))
-		k = len(set(pw_genes) & set(b_genes))
-		p = stat.hypergeom.sf(k-1, M, n, N)
-		tmp_hypergeom['pw'].append(pw)
-		tmp_hypergeom['p'].append(p)
-		pvalues.append(p)
-	_, qvalues, _, _ = multipletests(pvalues)
-	tmp_hypergeom['q'] = qvalues
-	tmp_hypergeom = pd.DataFrame(tmp_hypergeom).sort_values(by=['q'])
-	proximal_pathways = tmp_hypergeom.loc[tmp_hypergeom['q']<=qval,:]['pw'].tolist() ## proximal_pathways
+	test_dic = {'NetBio': test_epdf.loc[test_epdf['pathway'].isin(proximal_pathways), :]}
+	X_test = test_dic['NetBio'].T.values[1:]
+	gcv = model
 
-	train_dic = {}
-	test_dic = {}
-
-	train_dic['NetBio'] = train_epdf.loc[train_epdf['pathway'].isin(proximal_pathways),:]
-	test_dic['NetBio'] = test_epdf.loc[test_epdf['pathway'].isin(proximal_pathways),:]
-
-	X_train, X_test = train_dic['NetBio'].T.values[1:], test_dic['NetBio'].T.values[1:]
-	y_train, y_test = train_responses, test_responses
-
-	# make predictions
-	model = LogisticRegression()
-	if penalty == 'l2':
-		param_grid = {'penalty':['l2'], 'max_iter':[1000], 'solver':['lbfgs'], 'C':np.arange(0.1, 1, 0.1), 'class_weight':['balanced'] }
-	if penalty == 'none':
-		param_grid = {'penalty':['none'], 'max_iter':[1000], 'class_weight':['balanced'] }
-	cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-	gcv = GridSearchCV(model, param_grid=param_grid, cv=cv, scoring='roc_auc', 
-			n_jobs=5).fit(X_train, y_train) #cv=5
-
-	pred_proba = gcv.best_estimator_.predict_proba(X_test)[:,1]
+	pred_proba = gcv.predict_proba(X_test)[:,1]
 	logit_pred = logit(np.clip(pred_proba, 1e-6, 1 - 1e-6))
 
-	return logit_pred
+	# indexed by sample, so callers cannot pair the scores with the wrong samples
+	return pd.Series(logit_pred, index=test_data.common_id, name='NetBio')

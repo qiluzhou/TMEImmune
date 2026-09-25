@@ -1,0 +1,9 @@
+cohort,data_type,sample_key,key_variable,format,notes
+Cohort_A,clinical,sample_id,response,Responder/Non-responder,mutation available
+Cohort_A,expression,sample_id,gene symbols,log2(TPM+1)-like,
+Cohort_A,mutation,sample_id + gene,variant_class,long format,
+Cohort_B,clinical,SampleID,BestOverallResponse,CR/PR/SD/PD,mutation available
+Cohort_B,expression,SampleID,Ensembl-like IDs,TPM,5 genes intentionally missing
+Cohort_B,mutation,SampleID + Hugo_Symbol,Consequence,long format,
+Cohort_C,clinical,patient,responder_flag,0/1,no mutation data
+Cohort_C,expression,patient,gene symbols,raw-count-like,

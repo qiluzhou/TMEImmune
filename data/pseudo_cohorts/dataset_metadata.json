@@ -1,0 +1,26 @@
+{
+  "synthetic": true,
+  "purpose": "Stress-test TME/ICI multicohort harmonization.",
+  "cohorts": {
+    "Cohort_A": {
+      "n": 55,
+      "cancer": "Melanoma",
+      "treatment": "anti-PD-1",
+      "mutation_available": true
+    },
+    "Cohort_B": {
+      "n": 48,
+      "cancer": "melanoma",
+      "treatment": "Pembrolizumab",
+      "mutation_available": true
+    },
+    "Cohort_C": {
+      "n": 52,
+      "cancer": "Urothelial carcinoma",
+      "treatment": "Atezolizumab",
+      "mutation_available": false
+    }
+  },
+  "known_signal": "Immune signal is positively associated with response; stromal signal is negatively associated with response.",
+  "warning": "Synthetic data only; no biological inference should be made from these values."
+}

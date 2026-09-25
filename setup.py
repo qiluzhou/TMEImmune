@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
-VERSION = '1.3.3' 
-DESCRIPTION = 'Python package for calculating TME scores'
+VERSION = '2.0.0'
+DESCRIPTION = 'Python package for TME scoring and sex-aware immunotherapy response prediction'
 
 
 # Setting up
@@ -17,13 +17,13 @@ setup(
         packages=find_packages(),
         include_package_data=True,
         package_data={
-        "TMEImmune": ["data/*.csv", "data/*.json", "data/*.gmt", "data/nb_biomarker/*", "data/Gide/*"], 
+        "TMEImmune": ["data/*.csv", "data/*.json", "data/*.gmt", "data/*.npz", "data/nb_biomarker/*", "data/Gide/gide_training.npz", "data/isafn/*"], 
         },
         install_requires=["pandas>=1.5.0", "numpy>=1.23.5", "rnanorm",
-                          "inmoose", "lifelines", "scikit-learn", "matplotlib", "scipy", "statsmodels", "joblib"], 
+                          "inmoose", "lifelines", "scikit-learn", "matplotlib", "scipy", "statsmodels", "joblib", "gseapy", "torch"], 
         keywords=['python', 'TME score'],
         classifiers= [
-            "Development Status :: 3 - Alpha",
+            "Development Status :: 4 - Beta",
             "Intended Audience :: Education",
             "Programming Language :: Python :: 3",
             "Operating System :: MacOS :: MacOS X",

@@ -1,5 +1,6 @@
 include TMEImmune/data/*.csv
 include TMEImmune/data/*.json
 include TMEImmune/data/*.gmt
+include TMEImmune/data/Gide/gide_training.npz
 recursive-include TMEImmune/data/nb_biomarker *
-recursive-include TMEImmune/data/Gide *
+recursive-include TMEImmune/data/isafn *

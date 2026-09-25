@@ -1,19 +1,30 @@
 # TMEImmune
 
-`TMEImmune` is a Python package that implements the ESTIMATE algorithm, ISTMEscore method, NetBio method, and SIA method. The ESTIMATE and ISTMEscore methods were originally available only in R, and we've ported them to Python for broader accessibility. Additionally, the NetBio and SIA methods, which did not have existing packages, has been manually implemented in Python following the original publications and codes.
+`TMEImmune` is a Python package for tumor micro-environment (TME) scoring and immune checkpoint inhibitor (ICI) response prediction. Version 2 adds other existing TME scoring methods, especially **ISAFN**, a pretrained sex-aware deep learning model that predicts ICI response from gene expression and, when available, somatic mutations. The package also retains the implementation of the ESTIMATE algorithm, the ISTMEscore method, the NetBio method and the SIA method. The ESTIMATE and ISTMEscore methods were originally available only in R, and we've ported them to Python for broader accessibility. Additionally, the NetBio and SIA methods, which did not have existing packages, has been manually implemented in Python following the original publications and codes.
+
+## What's new in version 2
+
+- **ISAFN**: pretrained models predicting ICI response from expression alone or from expression + mutation, with sex-specific and sex-agnostic (merged) variants.
+- **Sex imputation** from chrY genes and XIST, for cohorts where sex was not recorded. Sex enters every ISAFN model, including the merged one.
+- **One call for every score**: `TME_score.get_all_score` computes the signature scores (CYT, IFNr, TLS, TIS, TIP, CS polarity, IMPRES, TGFb), ESTIMATE, ISTME, SIA, NetBio and ISAFN together.
+- **Automatic log2 handling**: data that are not log-transformed are detected and converted to log2(x+1) before scoring.
+- **Faster**: a closed-form ssGSEA, cached data files and a trimmed NetBio training table. NetBio is about 20x faster from a cold start and 200x faster within a session; the installed package is about 90 MB smaller.
+- **Reproducible**: fixed a sample-ordering bug that made NetBio scores differ between runs, and made ssGSEA independent of the order of the genes.
+- **Evaluation and scale**: performance tables with bootstrap confidence intervals, optimism-corrected score selection, parallel scoring of several cohorts, and a benchmarking module.
 
 ## Features
 
-- Implementation of the ESTIMATE algorithm for estimating stromal, immune and estimate scores in tumor samples. Estimate tumor purity for Affymetrix platform data. 
+- Implementation of the ESTIMATE algorithm for estimating stromal, immune and estimate scores in tumor samples. Estimate tumor purity for Affymetrix platform data.
 - Implementation of the ISTMEscore method for improved tumor microenvironment (TME) immune and stromal scoring. The ISTME TME subtypes are also provided.
 - Novel implementation of the NetBio and SIA method for comprehensive TME analysis.
-- Data pre-processing including normalization and batch correction for both unnormalized read counts and normalized data.
-- Performance evaluation for immune checkpoint inhibitor response prediction and survival prognosis.
+- ISAFN prediction of ICI response from expression and mutation data, with sex-specific models and sex imputation.
+- Data pre-processing including normalization, log2 transformation and batch correction for both unnormalized read counts and normalized data.
+- Performance evaluation for immune checkpoint inhibitor response prediction and survival prognosis, with bootstrap confidence intervals.
+- Benchmarking and parallel helpers for large cohorts.
 
 ## Requirement
 
-The installation of `TMEImmune` requires python version 3.10 and above.
-
+The installation of `TMEImmune` requires python version 3.10 and above. ISAFN additionally requires `torch`, and the TGFb ssGSEA score requires `gseapy`; both are installed with the package.
 
 ## Installation
 
@@ -24,44 +35,107 @@ pip install TMEImmune
 pip install git+https://github.com/ShahriyariLab/TMEImmune
 ```
 
+To work on the package itself, install it in editable mode from a clone, so that `import TMEImmune` uses your working copy rather than a previously installed one:
+
+```bash
+git clone https://github.com/ShahriyariLab/TMEImmune
+cd TMEImmune
+pip install -e .
+```
+
+## Testing
+
+The `tests/` folder holds runnable scripts that check the package on generated data and print the numbers behind the tables above. Run them from the project root:
+
+```bash
+python tests/test_isafn.py        # ISAFN, sex imputation, log2 handling, all scores, evaluation
+python tests/test_efficiency.py   # fast vs original ssGSEA, caches, runtime and memory by cohort size
+python tests/test_parallel.py     # parallel cohorts, bootstrap confidence intervals
+```
+
+`test_efficiency.py` writes `data/benchmark/optimisation_table.csv`, `scaling.csv` and `scaling.png`.
 
 ## Usage
 
 Here are some basic usage examples:
 
-Example 1:
+Example 1: all scores for one cohort
 ```
 import pandas as pd
 from TMEImmune import data_processing, TME_score, optimal
 
-# Step 1: Data Normalization
+# Step 1: Data Normalization (log2(x+1) is applied automatically when the data are not log-scale)
 clin = pd.read_csv("example_clin.csv", index_col = 0)
 df = data_processing.normalization(path = "example_gene.csv", method = 'TMM', batch = clin, batch_col = "CANCER")
 
-# Step 2: Compute TME score
+# Step 2: Compute every TME score
+score = TME_score.get_all_score(df, clin, response_col = "response", gender_col = "SEX", drug_col = "DRUG",
+                                impute_sex = True)
+
+# Step 3: Performance comparison (figures show the top 5 scores, the table has all of them)
+outcomes, table = optimal.get_performance(score, metric = 'ICI', score_name = list(score.columns),
+                                          ICI_col = 'response', df_clin = clin, top_n = 5, return_table = True)
+```
+
+Example 2: the individual scores, as in version 1
+```
 score = TME_score.get_score(df, method = ['ESTIMATE','ISTME', 'NetBio', 'SIA'], clin = clin, test_clinid = "response")
 
-# Step 3: Performance comparison
-outcome = optimal.get_performance(score, metric = ['ICI', 'survival'], 
-                                  score_name = ['EST_stromal','EST_immune','IS_immune', 'IS_stromal','NetBio','SIA'], 
+outcome = optimal.get_performance(score, metric = ['ICI', 'survival'],
+                                  score_name = ['EST_stromal','EST_immune','IS_immune', 'IS_stromal','NetBio','SIA'],
                                   ICI_col = 'response', surv_col = ['time', 'delta'], df_clin = clin)
 ```
 
-Example 2:
+Example 3: ISAFN with mutation data
 ```
-gene = pd.read_excel("riaz.xlsx", sheet_name=0, index_col=0)
-clin = pd.read_excel("riaz.xlsx", sheet_name=1, index_col = 1)
-clin = clin.loc[clin.index.str.contains("Pre", na=False)]
-clin['delta'] = clin['Dead/Alive\n(Dead = True)'].apply(lambda x: 1 if x == True else 0)
-clin['OS'] = clin['Time to Death\n(weeks)']
-df_norm = data_processing.normalization(gene, batch = clin, batch_col = "Cohort")
+from TMEImmune import ISAFN
 
-score = TME_score.get_score(df_norm, method = ['ESTIMATE','ISTME', 'NetBio', 'SIA'], clin = clin, test_clinid = "response")
+xlsx = pd.ExcelFile("example_riaz.xlsx")
+expr = pd.read_excel(xlsx, "riaz").set_index("gene").T          # samples as rows, gene symbols as columns
+clin = pd.read_excel(xlsx, "Sheet1").dropna(subset = ["ID"]).set_index("ID")
+maf = pd.read_excel(xlsx, "Sheet2")                             # one row per mutation
 
-outcome = optimal.get_performance(score, metric = ['ICI', 'survival'], 
-                                  score_name = ['EST_stromal','EST_immune','IS_immune', 'IS_stromal','NetBio','SIA'], 
-                                  ICI_col = 'response', surv_col = ['delta', 'OS'], df_clin = clin, name = "Riaz et al.")
+# long-format mutation calls -> samples x genes matrix of mutation counts
+mut = ISAFN.mutation_to_matrix(maf, sample_col = "ID", gene_col = "Hugo Symbol")
+
+pred = ISAFN.isafn_score(expr, clin, df_mut = mut, drug_col = "drug", met_col = "Metastasis",
+                         cancer = "melanoma", impute_sex = True)
 ```
+
+`isafn_score` returns one row per sample with `isafn_expr_prob` and `isafn_expr_pred` (expression model) and, when mutation data are given, `isafn_fusion_prob` and `isafn_fusion_pred` (expression + mutation model). Expression is aligned to the training range within each cohort, so a cohort should be scored as a whole rather than one sample at a time. When sex is recorded, pass `gender_col`; `impute_sex = True` fills in only the samples whose sex is missing, from chrY gene and XIST expression, and the imputed values are stored in `pred.attrs['imputed_sex']`.
+
+Example 4: several cohorts and bootstrap confidence intervals
+```
+from TMEImmune import parallel
+
+scores = parallel.score_cohorts({'riaz': {'df': expr1, 'clin': clin1},
+                                 'gide': {'df': expr2, 'clin': clin2}},
+                                response_col = 'response', n_jobs = -1)
+
+ci = parallel.bootstrap_metric(clin1['resp'], scores['riaz'], metric = 'auc', n_boot = 2000, n_jobs = -1)
+best = parallel.bootstrap_best_score(clin1['resp'], scores['riaz'])    # optimism-corrected best score
+```
+
+Example 5: benchmarking
+```
+from TMEImmune import benchmark
+
+cost = benchmark.benchmark_scores(df, clin, response_col = 'response', sizes = [50, 100, 200])
+benchmark.plot_benchmark(cost, 'benchmark.png')
+table = benchmark.compare_implementations(df, clin, 'response')        # original vs fast ssGSEA
+```
+
+## Performance
+
+Measured on a synthetic cohort of 15,000 genes x 60 samples (`python tests/test_efficiency.py`); "cold" clears every cache first, "warm" is what a user sees when several scores are computed in one session.
+
+| Score | version 1 | v2 cold | v2 warm | speedup (cold / warm) |
+|---|---|---|---|---|
+| ESTIMATE | 0.60 s | 0.31 s | 0.07 s | 1.9x / 8.7x |
+| ISTME | 0.65 s | 0.31 s | 0.06 s | 2.1x / 10.8x |
+| NetBio | 43.0 s | 1.90 s | 0.21 s | 22.7x / 206x |
+
+The ssGSEA enrichment score is now computed in closed form instead of walking a cumulative sum over all genes for every gene set. It matches the original implementation exactly on data without ties, and no longer depends on the order of the genes.
 
 ## Docker Container
 For users who prefer a ready-to-use, stable runtime environment, we provide a pre-built Docker container `tmeimmune` that includes all necessary dependencies and configurations for running our package. Below shows an example to pull the image from docker and run it, which returns the same output as Example 1 in previous section.
@@ -122,35 +196,37 @@ This error indicates that no C++ compiler (g++) is installed in the current envi
 apt-get update && apt-get install -y build-essential
 ```
 
+### Bug 3: cannot import name 'benchmark' (or 'parallel', or 'ISAFN')
+
+An older TMEImmune is installed in the active environment and shadows the version 2 files. Install the current one, from a clone (`pip install -e .`) or from PyPI (`pip install -U TMEImmune`), and check with:
+
+```
+python -c "import TMEImmune; print(TMEImmune.__version__, TMEImmune.__file__)"
+```
+
+### Bug 4: No module named 'torch'
+
+ISAFN runs on PyTorch. Install it for your platform (see https://pytorch.org); the CPU build is enough, no GPU is required.
 
 If you continue to have issues, please ensure that your system’s packages are up-to-date, or contact us for further support.
 
 
 ## License
-This project is licensed under the MIT License. See the LICENSE file for more details.
+This project is licensed under the GPLv3 License. See the LICENSE file for more details.
 
 ## Contact and contribution
 If you have any questions or feedback, feel free to open an issue on GitHub Issues. We also welcome contributions for integrating new TME scores into our package. If you'd like to propose a method, please attach a link to its introduction in the Github issue using the `feature_request` template, and we will evaluate it accordingly. If you encounter any bugs, open an issue on `bug_report`. All the changes we've made can be tracked through the GitHub project `TMEImmune_project`.
 
-## Acknowledgements
+<!-- ## Acknowledgements
 The ESTIMATE algorithm from Yoshihara et al.
 The ISTMEscore method from Zeng et al.
 The NetBio method from Kong et al.
-The SIA method from Mezheyeuski et al.
+The SIA method from Mezheyeuski et al. -->
 
 ## Citations
 
-If you use `TMEImmune` in your research, please cite the following papers:
+If you use `TMEImmune` in your research, please cite the following paper:
 
-Yoshihara, K., Shahmoradgoli, M., Martínez, E. et al. Inferring tumour purity and stromal and immune cell admixture from expression data. Nat Commun 4, 2612 (2013). https://doi.org/10.1038/ncomms3612
+Zhou, Q., & Shahriyari, L. (2025). TMEImmune: A Python package for deriving prognostic tumor micro-environment score. SoftwareX, 30, 102169. https://doi.org/10.1016/j.softx.2025.102169
 
-Zeng, Z., Li, J., Zhang, J. et al. Immune and stromal scoring system associated with tumor microenvironment and prognosis: a gene-based multi-cancer analysis. J Transl Med 19, 330 (2021). https://doi.org/10.1186/s12967-021-03002-1
-
-Kong, J., Ha, D., Lee, J., Kim, I., Park, M., Im, S. H., ... & Kim, S. (2022). Network-based machine learning approach to predict immunotherapy response in cancer patients. Nature communications, 13(1), 3703. https://doi.org/10.1038/s41467-022-31535-6
-
-Mezheyeuski, A., Backman, M., Mattsson, J., Martín-Bernabé, A., Larsson, C., Hrynchyk, I., Hammarström, K., Ström, S., Ekström, J., Mauchanski, S., Khelashvili, S., Lindberg, A., Agnarsdóttir, M., Edqvist, P. H., Huvila, J., Segersten, U., Malmström, P. U., Botling, J., Nodin, B., Hedner, C., … Sjöblom, T. (2023). An immune score reflecting pro- and anti-tumoural balance of tumour microenvironment has major prognostic impact and predicts immunotherapy response in solid cancers. EBioMedicine, 88, 104452. https://doi.org/10.1016/j.ebiom.2023.104452
-
-
-
-
-
+If you use the ISAFN score or the sex imputation, please also cite the ISAFN paper (reference to be added).
