@@ -16,6 +16,7 @@ setup(
         long_description_content_type="text/markdown",
         packages=find_packages(),
         include_package_data=True,
+        license='GPLv3',
         package_data={
         "TMEImmune": ["data/*.csv", "data/*.json", "data/*.gmt", "data/*.npz", "data/nb_biomarker/*", "data/Gide/gide_training.npz", "data/isafn/*"], 
         },

@@ -138,22 +138,33 @@ Measured on a synthetic cohort of 15,000 genes x 60 samples (`python tests/test_
 The ssGSEA enrichment score is now computed in closed form instead of walking a cumulative sum over all genes for every gene set. It matches the original implementation exactly on data without ties, and no longer depends on the order of the genes.
 
 ## Docker Container
-For users who prefer a ready-to-use, stable runtime environment, we provide a pre-built Docker container `tmeimmune` that includes all necessary dependencies and configurations for running our package. Below shows an example to pull the image from docker and run it, which returns the same output as Example 1 in previous section.
 
-Pull the Docker image:
-```
-docker pull qiluzhou/tmeimmune:v1.0
-```
+For a ready-to-use runtime with every dependency pinned to a tested version -- including `torch` for ISAFN and `inmoose` for ComBat -- we publish a prebuilt image. It is built for both `linux/amd64` and `linux/arm64`, so the same tag works on Intel machines, Apple Silicon and CI runners.
 
-Or build the Docker image from local Dockerfile after downloading the docker/ folder:
+Pull it:
 ```
-docker build -t tmeimmune .
+docker pull qiluzhou/tmeimmune:v2.0.0
 ```
 
-Run the container using Example 1. The two required example datasets are in the data/ folder.
+Or build it yourself from the `docker/` folder, which holds the `Dockerfile` and the pinned `requirements.txt`. The package itself is installed from PyPI, so you do not need to clone the repository to build the image:
 ```
-docker run --rm -v $(pwd):/app tmeimmune python /app/docker_test.py
+cd docker
+docker build -t tmeimmune:v2 .
 ```
+
+The image carries the package, its dependencies and the pretrained ISAFN model, but not the example data. Mount the repository so the container can read it:
+```
+docker run --rm -v $(pwd):/work -w /work qiluzhou/tmeimmune:v2.0.0 python docker/docker_test.py
+```
+
+`docker/docker_test.py` runs the whole v2 workflow on the example data: identifier and unit detection, gene-coverage assessment, harmonisation, every score including ISAFN, a ROC figure and a performance table, decision curve analysis, redundancy analysis, and a three-cohort merge with a batch-correction comparison. Figures are written to `docker/output/`. It exits non-zero if any step fails, so it also serves as a check that the image itself is sound.
+
+For an interactive session:
+```
+docker run --rm -it -v $(pwd):/work -w /work qiluzhou/tmeimmune:v2.0.0
+```
+
+One thing to know inside a container: when a conversion would change the shape of the data rather than just its units, the package asks before applying it, and a container has nobody to answer. The test script therefore calls `data_processing.set_confirm(True)` up front, and your own scripts should do the same (or pass `confirm=True` per call) so the conversion goes ahead unattended.
 
 ## Troubleshooting
 

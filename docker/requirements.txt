@@ -1,0 +1,40 @@
+# Pinned dependency set for the TMEImmune v2 container.
+#
+# These are the versions TMEImmune 2.0.0 was developed and tested against, so the image behaves the
+# same next month as it does today rather than drifting with whatever upstream released that week.
+# Regenerate after testing against newer dependencies:
+#
+#     python -c "
+#     from importlib.metadata import version
+#     for p in ['pandas','numpy','scipy','scikit-learn','statsmodels','matplotlib','joblib',
+#               'torch','gseapy','lifelines','inmoose','rnanorm','openpyxl']:
+#         print(f'{p}=={version(p)}')
+#     "
+#
+# Only the direct dependencies are pinned, not the whole transitive closure. That is deliberate: the
+# linux/amd64 build of torch pulls a set of nvidia-* wheels that do not exist for linux/arm64, so a
+# fully frozen list cannot describe both architectures at once. Pinning the direct dependencies fixes
+# everything that determines results; the rest floats within the ranges those packages allow.
+
+TMEImmune==2.0.0
+
+# core numerics
+numpy==2.5.2
+pandas==2.3.3
+scipy==1.18.0
+
+# ISAFN
+torch==2.14.0
+
+# scoring and statistics
+scikit-learn==1.9.0        # NetBio's logistic model, calibration, clustering
+statsmodels==0.14.6        # multiple-testing correction in NetBio pathway selection
+gseapy==1.3.1              # ssGSEA for ESTIMATE, ISTME and the signature scores
+lifelines==0.30.3          # survival analysis in optimal.py
+inmoose==0.9.1             # ComBat cross-cohort batch correction
+rnanorm==2.2.0             # TMM normalisation; imported when data_processing loads
+
+# plotting, parallelism, spreadsheet input
+matplotlib==3.11.1
+joblib==1.5.3
+openpyxl==3.1.5            # reading .xlsx expression/clinical files

@@ -26,8 +26,6 @@ TMEImmune/data/c2.all.v7.2.symbols.gmt
 TMEImmune/data/gene_annotation.npz
 TMEImmune/data/gene_sets_full.json
 TMEImmune/data/Gide/gide_training.npz
-TMEImmune/data/Gide/pathway_expression_ssgsea.txt
-TMEImmune/data/Gide/patient_df.txt
 TMEImmune/data/isafn/cohort_minmax_global.json
 TMEImmune/data/isafn/features_output.json
 TMEImmune/data/isafn/fusion_models_final.pkl
