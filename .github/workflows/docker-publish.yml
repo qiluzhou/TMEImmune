@@ -38,8 +38,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # pinned rather than ubuntu-latest, so a runner-image migration cannot change the build
+          # under you, and so both halves sit on the same Ubuntu release
           - platform: linux/amd64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - platform: linux/arm64
             runner: ubuntu-24.04-arm
     steps:
@@ -112,7 +114,7 @@ jobs:
   merge:
     name: Publish the multi-platform tags
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Collect the per-platform digests
         uses: actions/download-artifact@v4
