@@ -1,0 +1,149 @@
+name: Publish Docker image
+
+# Started by hand from the Actions tab. Each architecture is built on a runner of that architecture,
+# so nothing is emulated: the amd64 half runs on ubuntu-latest and the arm64 half on a native arm
+# runner (free for public repositories). A final job stitches the two into one multi-platform tag.
+#
+# Before the first run, add two repository secrets under Settings -> Secrets and variables -> Actions:
+#   DOCKERHUB_USERNAME   your Docker Hub account name
+#   DOCKERHUB_TOKEN      an access token from Docker Hub -> Account settings -> Personal access tokens
+#
+# The package version inside the image comes from docker/requirements.txt, not from the tag you type
+# here; the build prints both and warns if they disagree.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Image version, e.g. 2.0.0 -- publishes v2.0.0 and v2"
+        required: true
+        type: string
+      move_latest:
+        description: "Also point :latest at this build"
+        required: false
+        default: true
+        type: boolean
+
+env:
+  IMAGE: qiluzhou/tmeimmune
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and check ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Name this platform for artifact paths
+        run: |
+          platform="${{ matrix.platform }}"
+          echo "PLATFORM_PAIR=${platform//\//-}" >> "$GITHUB_ENV"
+
+      - name: Check the tag against the pinned package version
+        run: |
+          pinned=$(grep -i '^TMEImmune==' docker/requirements.txt | cut -d= -f3)
+          echo "workflow input : ${{ inputs.version }}"
+          echo "requirements   : $pinned"
+          if [ "$pinned" != "${{ inputs.version }}" ]; then
+            echo "::warning::image will be tagged v${{ inputs.version }} but contains TMEImmune $pinned"
+          fi
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Built into the local daemon first so the image can be exercised before anything is published.
+      - name: Build for testing
+        uses: docker/build-push-action@v6
+        with:
+          context: ./docker
+          platforms: ${{ matrix.platform }}
+          load: true
+          tags: tmeimmune:check
+          cache-from: type=gha,scope=${{ env.PLATFORM_PAIR }}
+          cache-to: type=gha,mode=max,scope=${{ env.PLATFORM_PAIR }}
+
+      # The repository is mounted because the image deliberately does not carry the example data.
+      - name: Run the container check
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work tmeimmune:check \
+            python -u docker/docker_test.py
+
+      # Second pass is almost entirely cache hits from the build above.
+      - name: Push by digest
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./docker
+          platforms: ${{ matrix.platform }}
+          cache-from: type=gha,scope=${{ env.PLATFORM_PAIR }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+
+      - name: Record the digest
+        run: |
+          mkdir -p /tmp/digests
+          echo "${{ steps.push.outputs.digest }}" > "/tmp/digests/${PLATFORM_PAIR}"
+
+      - name: Hand the digest to the merge job
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ env.PLATFORM_PAIR }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: Publish the multi-platform tags
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Collect the per-platform digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Create one manifest carrying both architectures
+        run: |
+          set -euo pipefail
+          version="${{ inputs.version }}"
+          major="${version%%.*}"
+          tags="-t ${IMAGE}:v${version} -t ${IMAGE}:v${major}"
+          if [ "${{ inputs.move_latest }}" = "true" ]; then
+            tags="$tags -t ${IMAGE}:latest"
+          fi
+          echo "tagging: $tags"
+          # shellcheck disable=SC2046
+          docker buildx imagetools create $tags \
+            $(printf "${IMAGE}@%s " $(cat /tmp/digests/*))
+
+      - name: Show what was published
+        run: |
+          docker buildx imagetools inspect "${IMAGE}:v${{ inputs.version }}"
